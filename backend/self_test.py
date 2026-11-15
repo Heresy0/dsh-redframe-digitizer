@@ -20,7 +20,10 @@ def unpack(result):
  return result.structuredContent or json.loads(result.content[0].text)
 
 async def main():
+ import argparse
+ parser=argparse.ArgumentParser();parser.add_argument('--getdata-exe',type=Path);args=parser.parse_args()
  env={k:v for k,v in os.environ.items() if not k.startswith(('CODEX','REDFRAME_NODE','REDFRAME_ARTIFACT'))}
+ env['REDFRAME_GETDATA_EXE']=str(args.getdata_exe.resolve(strict=True)) if args.getdata_exe else ''
  folder=BASE/'selftest';folder.mkdir(exist_ok=True);pdf_fixture(folder/'synthetic.pdf')
  from openpyxl import Workbook
  from openpyxl.styles import PatternFill
@@ -34,20 +37,32 @@ async def main():
    refused=await session.call_tool('export_workbook',{'job_id':jid,'coverage_notes':'Must reject incomplete data'});assert refused.isError
    panel=unpack(await session.call_tool('crop_panel',{'job_id':jid,'paper_id':1,'page':1,'box_points':[0,0,300,300],'panel_label':'Synthetic panel'}))
    points=[[200,200],[600,600],[1000,800]]
-   d=unpack(await session.call_tool('submit_digitization',{'job_id':jid,'panel_id':panel['id'],'title':'Portable Graph Test','metric':'Mass remaining (%)','x_unit':'days','y_unit':'%','calibration':{'x':[[200,0],[1000,10]],'y':[[1000,0],[200,100]]},'series':[{'label':'Control','points':points}]}))
-   assert d['points']==3
+   d=unpack(await session.call_tool('submit_digitization',{'job_id':jid,'panel_id':panel['id'],'title':'Portable Graph Test','metric':'Mass remaining (%)','x_unit':'days','y_unit':'%','calibration':{'x':[[200,0],[1000,10]],'y':[[1000,0],[200,100]]},'series':[{'label':'Control 中文; α','points':points},{'label':'Treatment; β','points':[[200,1000],[600,800],[1000,200]]}]}))
+   assert d['points']==6
    view=await session.call_tool('view_job_image',{'job_id':jid,'relative_path':d['overlay']});assert view.content[0].type=='image'
    unpack(await session.call_tool('review_panel',{'job_id':jid,'panel_id':panel['id'],'accepted':True,'review_notes':'Synthetic fixed geometry: 3 known mean centers; anchors independently specified by fixture. This is a programmatic regression, not an AI recognition accuracy test.'}))
-   final=unpack(await session.call_tool('export_workbook',{'job_id':jid,'coverage_notes':'Single synthetic PDF with one red-framed panel, 3 known marker points.'}))
-   assert final['validation']['points']==3 and final['validation']['engine']=='openpyxl'
+   final_result=await session.call_tool('export_workbook',{'job_id':jid,'coverage_notes':'Single synthetic PDF, one panel, six independently specified synthetic coordinates; this is a programmatic export regression.'})
+   if not args.getdata_exe:
+    assert final_result.isError and 'GetData is not configured' in str(final_result.content),'No-desktop CI must refuse export without fallback'
+    report={'ok':True,'tools':8,'desktop_export_tested':False,'missing_getdata_refused':True,'synthetic_input_only':True}
+    (BASE/'selftest_report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+    print('MCP PORTABLE CHECK PASSED: tools/images/review verified; missing GetData refused. Desktop export NOT tested.');return
+   final=unpack(final_result)
+   assert final['validation']['points']==6 and final['validation']['engine']=='openpyxl'
+   assert final['validation']['digitizer']=='getdata' and final['validation']['getdata_executed'] is True
+   proof=final['validation']['getdata_exports'][0];assert proof['verified'] and proof['curves']==2 and proof['points']==6
+   from getdata_adapter import parse_export,sha256
+   assert sha256(proof['txt'])==proof['txt_sha256']
+   raw=parse_export(proof['txt'],['RF0001','RF0002'])
+   assert raw['RF0001']==[[0,100],[5,50],[10,25]] and raw['RF0002']==[[0,0],[5,25],[10,100]]
    ns={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
    with zipfile.ZipFile(final['workbook']) as z:
     sheet=E.fromstring(z.read('xl/worksheets/sheet2.xml'));values={c.get('r'):float(c.find('s:v',ns).text) for c in sheet.findall('.//s:c',ns) if c.get('t') not in ('s','str','inlineStr','e','b') and c.find('s:v',ns) is not None}
-    for i,(x,y) in enumerate([(0,100),(5,50),(10,25)],2):assert math.isclose(values[f'C{i}'],x) and math.isclose(values[f'D{i}'],y)
+    for i,(x,y) in enumerate(raw['RF0001']+raw['RF0002'],2):assert math.isclose(values[f'C{i}'],x) and math.isclose(values[f'D{i}'],y)
     zero=sheet.find('.//s:c[@r="C2"]',ns);styles=E.fromstring(z.read('xl/styles.xml'));fmt=list(styles.find('s:cellXfs',ns))[int(zero.get('s','0'))].get('numFmtId')
     custom={c.get('numFmtId'):c.get('formatCode') for c in styles.findall('s:numFmts/s:numFmt',ns)}
     assert fmt=='1' or custom.get(fmt)=='0','Zero must use integer format'
-   report={'ok':True,'tools':8,'points':3,'synthetic_input_only':True,'workbook':final['workbook']}
-   (BASE/'selftest_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');print('MCP SELF-TEST PASSED: 8 tools, 3 known points, Excel XML and zero format checked.')
+   report={'ok':True,'tools':8,'points':6,'desktop_export_tested':True,'synthetic_input_only':True,'workbook':final['workbook'],'getdata_evidence':proof}
+   (BASE/'selftest_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');print('MCP GETDATA SELF-TEST PASSED: actual GetData -> TXT -> Excel, 8 tools, 2 curves/6 known points, Excel XML and zero format checked.')
 
 if __name__=='__main__':asyncio.run(main())

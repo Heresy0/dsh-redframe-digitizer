@@ -116,7 +116,9 @@ def export(payload):
             units=lambda t:sum(2 if ord(c)>255 else 1 for c in t)
             sh.row_dimensions[index].height=max(47,math.ceil(units(row[0])/95)*18+4,math.ceil(units(row[1])/54)*18+4,math.ceil(units(row[4])/56)*18+4)
         for row,panel in starts:
-            sh.cell(row,3).comment=Comment(f"Source: {paper['source']}; PDF page {panel['page']}; {panel['label']}. X: {panel['x_unit']}; Y: {panel['y_unit']}. Mean markers only; approximate graph digitization. Review: {panel['review']}",'Redframe Digitizer')
+            proof=panel.get('getdata_export')
+            provenance=f" Actual GetData TXT: {Path(proof['txt']).name}; SHA256: {proof['txt_sha256']}; GDW precision: 1/9 pixel." if proof else ''
+            sh.cell(row,3).comment=Comment(f"Source: {paper['source']}; PDF page {panel['page']}; {panel['label']}. X: {panel['x_unit']}; Y: {panel['y_unit']}. Mean markers only; approximate graph digitization. Review: {panel['review']}"+provenance,'Redframe Digitizer')
         expected[name]=rows;counts.append(dict(paper=paper['id'],sheet=name,points=len(rows),curves=sum(len(p['series']) for p in paper['panels'])))
     if original_formulas:wb.calculation=CalcProperties(fullCalcOnLoad=True)
     temp=output.with_name(output.stem+'.pending.xlsx');wb.save(temp)

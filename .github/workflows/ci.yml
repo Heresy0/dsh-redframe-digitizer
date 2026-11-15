@@ -17,5 +17,7 @@ jobs:
       - run: node --test test/plugin.test.mjs
       - run: python -m pip install -r backend/requirements.txt
       - run: python backend/test_export.py
+      - run: python backend/test_getdata.py
       - run: python backend/self_test.py
-      # Synthetic point geometry verifies MCP/Excel flow, not model visual accuracy.
+      # CI has no GetData installation: self_test checks tool flow and mandatory refusal without GetData.
+      # Actual desktop -> TXT -> Excel is tested locally with --getdata-exe PATH.

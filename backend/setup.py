@@ -11,13 +11,17 @@ def configure():
     parser.add_argument('--env-dir',type=Path,default=BASE/'.venv')
     parser.add_argument('--wheelhouse',type=Path)
     parser.add_argument('--skip-deps',action='store_true',help='For environments with all required dependencies already installed')
+    parser.add_argument('--getdata-exe',type=Path,required=True,help='Installed, licensed GetData 2.20 executable on Windows')
     args=parser.parse_args()
     if args.harness_python and args.harness_python.resolve()!=Path(sys.executable).resolve():
-        forwarded=[args.harness_python,Path(__file__).resolve(),'--env-dir',args.env_dir]
+        forwarded=[args.harness_python,Path(__file__).resolve(),'--env-dir',args.env_dir,'--getdata-exe',args.getdata_exe]
         if args.wheelhouse:forwarded+=['--wheelhouse',args.wheelhouse]
         if args.skip_deps:forwarded+=['--skip-deps']
         run(forwarded);return
     if sys.version_info<(3,11):raise RuntimeError('Python 3.11+ required; use the Python returned by Harness load_workspace_dependencies.')
+    if os.name!='nt':raise RuntimeError('Actual GetData export requires Windows with an interactive desktop.')
+    getdata=args.getdata_exe.expanduser().resolve(strict=True)
+    if not getdata.is_file():raise RuntimeError('GetData executable not found')
     try:office=importlib.import_module('openpyxl')
     except ImportError:raise RuntimeError('This interpreter has no openpyxl. In Harness call load_workspace_dependencies and run setup.py with its Python, or pass --harness-python PATH.')
     print('Using openpyxl '+office.__version__+' from the selected base Python',flush=True)
@@ -32,12 +36,12 @@ def configure():
         else:print('Installing extra MCP/PDF dependencies from the configured Python package index (network required).',flush=True)
         run(cmd)
     run([python,'-c',"import mcp,pypdf,pypdfium2,numpy,PIL,openpyxl;print('MCP/PDF/Office imports OK')"])
-    run([python,BASE/'self_test.py'])
+    run([python,BASE/'self_test.py','--getdata-exe',getdata])
     # Write connection state only after the complete self-test passes.
-    runtime={'schemaVersion':2,'engine':'openpyxl','python':str(python),'basePython':sys.executable,'openpyxlVersion':office.__version__}
+    runtime={'schemaVersion':3,'engine':'openpyxl','digitizer':'getdata','getdata':{'executable':str(getdata)},'python':str(python),'basePython':sys.executable,'openpyxlVersion':office.__version__}
     old=BASE/'runtime.json'
-    if old.exists() and json.loads(old.read_text(encoding='utf-8')).get('engine')!='openpyxl':
-        (BASE/'runtime.before-0.2.local.json').write_text(old.read_text(encoding='utf-8'),encoding='utf-8')
+    if old.exists() and json.loads(old.read_text(encoding='utf-8')).get('schemaVersion')!=3:
+        (BASE/'runtime.before-0.3.local.json').write_text(old.read_text(encoding='utf-8'),encoding='utf-8')
     old.write_text(json.dumps(runtime,ensure_ascii=False,indent=2),encoding='utf-8')
     server={'command':str(python),'args':[str(BASE/'server.py')]}
     (BASE/'mcp-client.json').write_text(json.dumps({'mcpServers':{'redframe_digitizer':server}},ensure_ascii=False,indent=2),encoding='utf-8')

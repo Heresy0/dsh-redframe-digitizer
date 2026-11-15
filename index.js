@@ -12,7 +12,8 @@ export function apply(ctx,config={}){
  const runtimePath=path.join(installDir,'runtime.json');
  if(!fs.existsSync(runtimePath))throw Error('Redframe backend is not installed: run backend/install.cmd first, then set this plugin config.installDir to that installed backend folder.');
  const runtime=JSON.parse(fs.readFileSync(runtimePath,'utf8'));
- if(runtime.engine!=='openpyxl')throw Error('Backend needs the 0.2 installer migration; rerun backend/install.cmd with Harness Python.');
+ if(runtime.schemaVersion!==3||runtime.engine!=='openpyxl'||runtime.digitizer!=='getdata')throw Error('Backend needs the 0.3 installer migration; rerun setup.py with Harness Python and --getdata-exe PATH.');
+ if(typeof runtime.getdata?.executable!=='string'||!fs.existsSync(runtime.getdata.executable))throw Error('Configured GetData executable is missing; rerun setup.py --getdata-exe PATH.');
  const command=runtime.python,script=path.join(installDir,'server.py');
  if(typeof command!=='string'||!fs.existsSync(command)||!fs.existsSync(script))throw Error('Backend paths are invalid; reinstall after moving its folder.');
  const serverName=config.serverName||'redframe_digitizer';

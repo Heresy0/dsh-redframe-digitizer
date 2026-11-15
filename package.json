@@ -1,7 +1,7 @@
 {
   "name": "dsh-redframe-digitizer",
-  "version": "0.2.0",
-  "description": "DeepSeek Harness plugin bridge for agent-reviewed red-frame PDF graph digitization into Excel",
+  "version": "0.3.0",
+  "description": "DeepSeek Harness MCP plugin: reviewed PDF marker coordinates, native GetData Windows export, and Excel templates",
   "repository": {
     "type": "git",
     "url": "https://github.com/Heresy0/dsh-redframe-digitizer.git"

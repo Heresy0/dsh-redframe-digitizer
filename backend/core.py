@@ -1,6 +1,7 @@
 """Local, agent-assisted scientific graph digitization. No network or model keys."""
 from __future__ import annotations
 import hashlib, json, math, os, re, shutil, subprocess, uuid, zipfile
+from copy import deepcopy
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
@@ -156,14 +157,19 @@ def submit_digitization(job_id,panel_id,title,metric,x_unit,y_unit,calibration,s
     p.pop('review',None);save(root/'job.json',job)
     return {'panel_id':panel_id,'status':p['status'],'overlay':p['overlay'],'getdata_project':p.get('getdata_project'),
         'curves':len(records),'points':sum(len(s['points']) for s in records),'data':records,
-        'next':'View overlay and source legend, then call review_panel. Native GDW created only for linear axes; GetData GUI has not been executed.'}
+        'next':'View overlay and source legend, then call review_panel. These are calculated preview coordinates. export_workbook will run GetData and use its actual TXT values; only linear-axis export is currently verified.'}
 
 def write_gdw(path,image,panel):
     w,h=panel['image_size'];c=panel['calibration'];(x0,xmin),(x1,xmax)=c['x'];(y0,ymin),(y1,ymax)=c['y']
+    if c.get('x_scale','linear')!='linear' or c.get('y_scale','linear')!='linear':raise ValueError('Actual GetData export supports verified linear axes only')
+    if round(x0*9)==round(x1*9) or round(y0*9)==round(y1*9):raise ValueError('GetData quantization collapses axis anchors')
+    # Current installed GetData rejects PNG; JPEG keeps the identical pixel grid.
+    jpeg=path.with_suffix('.jpg');Image.open(image).convert('RGB').save(jpeg,quality=100,subsampling=0)
+    image=jpeg
     s=f'<?xml version="1.0" encoding="UTF-8"?><GetDataWorkspace><version>2.20</version><File><Name>{escape(str(image))}</Name><Width>{w}</Width><Height>{h}</Height></File>'
-    for line in panel['series']:
+    for index,line in enumerate(panel['series'],1):
         points=','.join(str(round(v*9)) for xy in line['pixel_points'] for v in xy)
-        s+=f'<Line><Caption>{escape(line["label"])}</Caption><LineColor>0,0,0</LineColor><BkColor>255,255,255</BkColor><PtColor>220,0,0</PtColor><LineType>0</LineType><Points MF="9">{points}</Points></Line>'
+        s+=f'<Line><Caption>RF{index:04}</Caption><LineColor>0,0,0</LineColor><BkColor>255,255,255</BkColor><PtColor>220,0,0</PtColor><LineType>0</LineType><Points MF="9">{points}</Points></Line>'
     for tag,x,y,value in [('Xmin',x0,y0,xmin),('Xmax',x1,y0,xmax),('Ymin',x0,y0,ymin),('Ymax',x0,y1,ymax)]:
         s+=f'<{tag} MF="9">{round(x*9)},{round(y*9)},{value}</{tag}>'
     s+='<CurrentLine>0</CurrentLine><XScale>linear</XScale><YScale>linear</YScale><Position>0,0</Position><Zoom><FitToWindow/></Zoom></GetDataWorkspace>'
@@ -179,7 +185,8 @@ def review_panel(job_id,panel_id,accepted,review_notes):
 def job_status(job_id):
     _,job=load_job(job_id)
     return {'job_id':job_id,'papers':len(job['papers']),'panels':[{k:p[k] for k in ['id','paper_id','label','status']} for p in job['panels']],
-            'points':sum(len(s['points']) for p in job['panels'] for s in p.get('series',[])),'exports':job.get('exports',[])}
+            'points':sum(len(s['points']) for p in job['panels'] for s in p.get('series',[])),'exports':job.get('exports',[]),
+            'digitizer':'getdata','last_getdata_attempt':job.get('last_getdata_attempt'),'getdata_exports':job.get('getdata_exports',[])}
 
 def export_workbook(job_id,coverage_notes):
     root,job=load_job(job_id)
@@ -189,16 +196,35 @@ def export_workbook(job_id,coverage_notes):
         panels=[p for p in job['panels'] if p['paper_id']==paper['id']]
         if not panels:raise ValueError(f'Paper {paper["id"]} has no accepted panels; incomplete export blocked')
         if len(set(p['title'] for p in panels))!=1:raise ValueError('Inconsistent article titles across panels')
+    # No fallback: every accepted panel must pass a real GetData desktop export.
+    from getdata_adapter import executable_from_config,export_panel
+    for panel in job['panels']:
+        if any(panel['calibration'].get(k,'linear')!='linear' for k in ('x_scale','y_scale')):
+            raise ValueError('GetData adapter currently verifies linear axes only; log-axis export is blocked, without fallback')
+    executable=executable_from_config(BASE)
+    run=root/'getdata_exports'/uuid.uuid4().hex;run.mkdir(parents=True)
+    job['last_getdata_attempt']=str(run.relative_to(root));save(root/'job.json',job)
+    exported_panels=[];evidence=[]
+    for original in job['panels']:
+        panel=deepcopy(original)
+        # Rebuild from the reviewed pixels, including older PNG-backed jobs.
+        project=run/f"{panel['id']}.gdw"
+        write_gdw(project,asset(root,panel['image']),panel)
+        records,proof=export_panel(panel,project,project.with_suffix('.txt'),executable)
+        panel['series']=records;panel['getdata_export']=proof
+        exported_panels.append(panel);evidence.append({'panel_id':panel['id'],**proof})
     output=root/'result.xlsx';preview=root/'previews';preview.mkdir(exist_ok=True)
     payload={'template':str(root/'template.xlsx'),'output':str(output),'preview_dir':str(preview),'papers':[]}
     for paper in job['papers']:
-        panels=[p for p in job['panels'] if p['paper_id']==paper['id']]
+        panels=[p for p in exported_panels if p['paper_id']==paper['id']]
         payload['papers'].append({'id':paper['id'],'title':panels[0]['title'],'source':paper['source_name'],'panels':panels})
     payload_file=root/'export.json';save(payload_file,payload)
     from export_xlsx import export
     report=export(payload)
+    report.update(digitizer='getdata',getdata_executed=True,getdata_exports=evidence)
     save(root/'validation.json',report)
     job['exports'].append(str(output)) if 'exports' in job else job.update(exports=[str(output)])
+    job['getdata_exports']=evidence
     job['coverage_notes']=coverage_notes;job['status']='exported';save(root/'job.json',job)
     return {'workbook':str(output),'validation':report,'preview_dir':str(preview),
         'next':'Data previews are not native workbook rendering. Use Harness office_render for workbook visual QA; if requires_recalculation is true, use office_recalculate first. Compare red-frame coverage. Structural checks are not scientific ground truth.'}
