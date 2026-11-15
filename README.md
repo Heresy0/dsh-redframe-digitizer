@@ -6,6 +6,54 @@ PDF 红框曲线均值点 → GetData 实际导出 → Excel 模板。插件提�
 
 仓库：[Heresy0/dsh-redframe-digitizer](https://github.com/Heresy0/dsh-redframe-digitizer)。Harness 插件来源：`github:Heresy0/dsh-redframe-digitizer`。源码 MIT，不分发 GetData 安装包、许可证或破解文件。
 
+## 给 DeepSeek / AI 助手的自动安装入口
+
+用户以安装或使用本插件为目的提供本仓库链接时，请先阅读本 README 和 [AGENTS.md](AGENTS.md)，再依次完成下面的本机安装与验收。不要只回复安装教程；有本地执行与配置能力时，实际完成常规步骤。若只是浏览、审查源码等其他请求，应按用户当次目的处理。
+
+用户只需提供本仓库链接；解释器、GetData 路径和连接文件优先在本机发现或生成。缺少必要工具、存在无法判断的多个安装版本、找不到软件或受到权限限制时，应明确报告具体缺项，必要时只询问该缺项。本文不保证所有 Harness 版本或模型都具备安装、配置及看图能力；遵循所在客户端的权限规则。
+
+### 1. 准备源码和本机环境
+
+- 使用用户指定的目录；没有指定时，在可写工作区新建独立目录，取得本仓库源码并记录绝对路径。可使用 git clone，或在没有 Git 时下载 GitHub 源码归档。不要覆盖已有文件；已有副本先检查来源、版本和未提交修改，再决定更新方式。
+- 确认当前为 Windows 可交互会话，GetData 已安装并可正常使用。本插件不会安装或修改 GetData。
+- 调用 Harness 的 `load_workspace_dependencies`，读取其返回的真实 Python 路径，并验证 Python 3.11+ 和 openpyxl 可导入。不要照搬开发者电脑的路径，不要求安装 Codex，也不要修改 Harness 基础运行库。
+- 查找本机 `GetDataW.exe` / `GetData.exe`：优先检查已运行进程的可执行路径、已安装应用记录及快捷方式，再检查常见安装目录。核对找到的是 GetData Graph Digitizer，优先使用本项目已验证的 2.20 Unicode 程序。找不到或多个版本无法确定时，再向用户询问完整路径。
+
+### 2. 实际运行安装器
+
+将发现的绝对路径作为参数传入安装器。下列变量表示刚刚发现的本机路径，必须先赋值，不可原样当作路径执行：
+
+```powershell
+# $harnessPython：load_workspace_dependencies 返回的 python.exe
+# $setupScript：本仓库 backend\setup.py 的绝对路径
+# $getDataExe：本机实际 GetDataW.exe / GetData.exe 路径
+& $harnessPython $setupScript --getdata-exe $getDataExe
+```
+
+首次安装不要传 `--skip-deps`。安装器在 backend 的独立虚拟环境中安装依赖，并执行“粗定位 → 中心精修 → 逐点复核 → 实际 GetData → TXT → Excel”合成自检。保持桌面会话可用，允许测试窗口正常运行。
+
+必须确认命令退出码为 0、出现 `INSTALLATION AND SELF-TEST PASSED`，且生成的 `backend/selftest_report.json` 中 `ok=true`、`desktop_export_tested=true`、`tools=9`。默认不带 `--getdata-exe` 的 self_test.py 仅验证无 GetData 时拒绝导出，不能代替实际软件自检。失败时读取报错及本次任务的证据日志后排查；不要跳过检查、伪造配置或改成计算后备导出。
+
+### 3. 连接 Harness，保留已有配置
+
+- 优先使用原生插件：来源为 `github:Heresy0/dsh-redframe-digitizer`，配置使用安装器生成的 `backend/harness-plugin.patch.yml`；其中 `installDir` 必须指向刚刚完成安装、含 runtime.json 的 backend。GitHub 插件下载副本可能是另一个目录，不能假设它自动继承虚拟环境。
+- 如果当前 Harness 没有插件所需的 `mcpManager.register`，使用安装器生成的 `backend/harness-client.entry.json`，通过官方 `@deepseek-ai/dsh-mcp-client` 直接连接本地 stdio MCP。通用 `mcp-client.json` 供采用 mcpServers 格式的其他客户端使用，不要把该外层格式直接覆盖到 Harness profile。
+- 使用客户端支持的配置方式，将生成的条目合入正确 profile。保留其他 MCP、插件、模型及账号配置；必要时先做本地备份。两种连接方式选择一种，同名 `redframe_digitizer` 条目只能启用一个；已有本插件配置时更新对应条目，勿重复追加。
+- 保留生成配置中的真实解释器、server.py 路径及 300000 ms 工具超时。按客户端能力重新加载连接；若必须用户重启才能加载，说明尚待重启，不要声称新连接已生效。
+
+### 4. 在真实 Harness 中验收
+
+1. 确认能发现 9 个 `mcp__redframe_digitizer__...` 工具，至少核对 `prepare_job`、`refine_panel_points`、`export_workbook`。
+2. 使用安装自检创建的合成任务调用 `view_job_image`，确认图片实际进入当前模型上下文，模型能够描述图中内容。工具返回成功或工具列表可见，都不能单独证明模型收到了图片。
+3. 确认合成任务的 Excel 已生成且实际 GetData 导出证据验证通过。若 Harness 的 `office_render` 可用，可用该合成工作簿检查版式。
+4. 当前模型不能接收图片时，报告“后端/连接已通过，但当前模型图片能力尚未验收”，按客户端支持方式选择具备图片输入能力的模型后继续；不要声称已经可以识图提取论文。
+
+完成后向用户简报：源码目录、Python/GetData 实际路径、使用的连接方式、软件自检/9 工具/模型图片接收各自的验收结果，以及任何尚未完成的步骤。不要输出或上传账号密钥、本机 runtime.json 或用户文献。
+
+安装验收完成后，用户直接发送 PDF 和 Excel 模板即可，例如：
+
+> 用 redframe_digitizer 提取这些 PDF 红框里的均值标记点，完成中心精修、叠加图及逐点复核，由 GetData 实际导出，再填入 Excel。每篇一表，名称用标题前三个单词，保留模板原表与格式。
+
 
 ## 0.4.0：粗定位、中心精修与逐点复核
 
