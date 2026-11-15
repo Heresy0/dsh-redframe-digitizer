@@ -94,9 +94,17 @@ def export_panel(panel,workspace,output,executable):
         parsed=parse_export(output,tokens)
         records,delta=checked_points(panel,parsed)
         evidence.update(verified=True,txt=str(output),txt_sha256=sha256(output),points=sum(len(s['points']) for s in records),curves=len(records),max_preview_delta=delta,pixel_quantization='GDW MF=9; 1/9 pixel',curve_map={token:s['label'] for token,s in zip(tokens,records)})
+        if panel.get('refinement'):
+            rr=panel['refinement']['points']
+            evidence['point_refinement']={'algorithm':panel['refinement']['algorithm'],'refined':sum(r['status']=='refined' for r in rr),'manually_confirmed_coarse':sum(bool(r.get('manual_review')) for r in rr),'marker_specs':panel['refinement']['marker_specs'],'points':rr}
         return records,evidence
     except Exception as exc:
-        evidence['error']=str(exc);raise
+        evidence['error']=str(exc)
+        if adapter.pid:
+            from getdata_win32 import windows
+            evidence['failure_windows']=[dict(r,children=windows(parent=r['hwnd'])) for r in windows(adapter.pid) if r['visible']]
+            evidence['process_exit_code']=adapter.process.poll()
+        raise
     finally:
         evidence['events']=adapter.events
         output.with_suffix('.evidence.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2),encoding='utf-8')
@@ -151,7 +159,11 @@ class GetDataAdapter:
             return ds[0] if len(ds)==1 else None
         row=wait_for(find,'Expected one file dialog')
         def ready():
+            if self.process.poll() is not None:raise RuntimeError(f'GetData exited before file dialog became ready (exit code {self.process.returncode}); no fallback export')
             children=windows(parent=row['hwnd'])
+            if row['text'] in ('GetDataW','GetData','GetData 2.20'):
+                messages=[c['text'] for c in children if c['cls']=='Static' and c['text']]
+                if messages:raise RuntimeError('GetData refused operation: '+'; '.join(messages))
             edits=[c for c in children if c['cls']=='Edit' and c['id'] in (1148,1152) and c['visible']]
             return (children,edits[0]) if len(edits)==1 else None
         children,edit=wait_for(ready,'File name control unavailable')
@@ -193,6 +205,7 @@ class GetDataAdapter:
         last=None;stable=0
         def written():
             nonlocal last,stable
+            if self.process.poll() is not None:raise RuntimeError(f'GetData exited during export (exit code {self.process.returncode}); no fallback export')
             if not output.is_file() or self.dialogs():return False
             size=output.stat().st_size
             stable=stable+1 if size==last else 0;last=size

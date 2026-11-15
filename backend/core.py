@@ -154,6 +154,7 @@ def submit_digitization(job_id,panel_id,title,metric,x_unit,y_unit,calibration,s
         write_gdw(asset(root,p['getdata_project']),asset(root,p['image']),p)
     else:p.pop('getdata_project',None)
     # A resubmission always invalidates any prior acceptance.
+    p.pop('refinement',None)
     p.pop('review',None);save(root/'job.json',job)
     return {'panel_id':panel_id,'status':p['status'],'overlay':p['overlay'],'getdata_project':p.get('getdata_project'),
         'curves':len(records),'points':sum(len(s['points']) for s in records),'data':records,
@@ -175,16 +176,78 @@ def write_gdw(path,image,panel):
     s+='<CurrentLine>0</CurrentLine><XScale>linear</XScale><YScale>linear</YScale><Position>0,0</Position><Zoom><FitToWindow/></Zoom></GetDataWorkspace>'
     path.write_text(s,encoding='utf-8')
 
-def review_panel(job_id,panel_id,accepted,review_notes):
+def refine_panel_points(job_id,panel_id,marker_specs):
+    """Bounded proposals from clean source pixels; unknown/ambiguous markers stay put."""
+    from refine_points import refine_series
+    root,job=load_job(job_id);p=next(p for p in job['panels'] if p['id']==panel_id)
+    if not p.get('series'):raise ValueError('Submit coarse digitization first')
+    original=Image.open(asset(root,p['image'])).convert('RGB')
+    rows=refine_series(original,p['series'],marker_specs)
+    records=deepcopy(p['series']);c=p['calibration']
+    for row in rows:
+        if row['status']!='refined':continue
+        for axis,key in enumerate(('x','y')):
+            before=convert(row['coarse'][axis],c[key],c.get(key+'_scale','linear'))
+            after=convert(row['selected'][axis],c[key],c.get(key+'_scale','linear'))
+            if before*after<0 or (before==0 and abs(after)>1e-12):
+                row.update(selected=row['coarse'],status='needs_review',reason='zero_boundary_requires_review');break
+    for series in records:
+        group=[r for r in rows if r['label']==series['label']]
+        series['coarse_pixel_points']=[r['coarse'] for r in group]
+        series['pixel_points']=[r['selected'] for r in group]
+        series['points']=[[convert(x,c['x'],c.get('x_scale','linear')),convert(y,c['y'],c.get('y_scale','linear'))] for x,y in series['pixel_points']]
+    overlay=original.copy();draw=ImageDraw.Draw(overlay)
+    def marks(d,x,y,color,kind):
+        if kind=='cross':d.line((x-5,y,x+5,y),fill=color,width=1);d.line((x,y-5,x,y+5),fill=color,width=1)
+        else:d.ellipse((x-6,y-6,x+6,y+6),outline=color,width=1)
+    for row in rows:
+        marks(draw,*row['coarse'],'cyan','cross')
+        if row['candidate']:marks(draw,*row['candidate'],'orange','circle')
+        marks(draw,*row['selected'],'magenta','cross')
+    folder=asset(root,p['image']).parent
+    overlay.save(folder/'refinement_overlay.png')
+    patches=[]
+    for start in range(0,len(rows),12):
+        batch=rows[start:start+12];sheet=Image.new('RGB',(880,240*math.ceil(len(batch)/4)),'white');d=ImageDraw.Draw(sheet)
+        for i,row in enumerate(batch):
+            cx,cy=row['coarse'];extent=35
+            patch=original.crop((round(cx)-extent,round(cy)-extent,round(cx)+extent+1,round(cy)+extent+1)).resize((184,184),Image.Resampling.NEAREST)
+            pd=ImageDraw.Draw(patch);scale=184/(extent*2+1)
+            for point,color,kind in [(row['coarse'],'cyan','cross'),(row['candidate'],'orange','circle'),(row['selected'],'magenta','cross')]:
+                if point:marks(pd,(point[0]-(round(cx)-extent))*scale,(point[1]-(round(cy)-extent))*scale,color,kind)
+            x=i%4*220;y=i//4*240;sheet.paste(patch,(x,y+48))
+            sn=next(j for j,s in enumerate(records,1) if s['label']==row['label'])
+            d.text((x+2,y+2),f"S{sn} P{row['point_index']} score={row['score']:.3f}\n{row['reason']}\ncyan=coarse magenta=selected",fill='black')
+        path=folder/f'refinement_patches_{start//12+1}.png';sheet.save(path);patches.append(str(path.relative_to(root)))
+    p.update(series=records,status='awaiting_review',overlay=str((folder/'refinement_overlay.png').relative_to(root)),
+             refinement={'algorithm':'local_shape_dice_v1','marker_specs':marker_specs,'points':rows,'patches':patches})
+    p.pop('review',None)
+    if p.get('getdata_project'):write_gdw(asset(root,p['getdata_project']),asset(root,p['image']),p)
+    save(root/'job.json',job)
+    return {'panel_id':panel_id,'status':p['status'],'overlay':p['overlay'],'patches':patches,'refined':sum(r['status']=='refined' for r in rows),
+            'unresolved':sum(r['status']=='needs_review' for r in rows),'points':rows,
+            'next':'View overlay AND every patch sheet. Cyan is coarse, magenta selected, orange candidate. Scores are heuristic, not probability. Each unresolved point needs an explicit keep_coarse decision and source-based note in review_panel; if wrong, resubmit corrected coordinates. Acceptance is never automatic.'}
+
+def review_panel(job_id,panel_id,accepted,review_notes,point_reviews=None):
     root,job=load_job(job_id);panel=next(p for p in job['panels'] if p['id']==panel_id)
     if panel['status']=='needs_digitization' or not review_notes.strip():raise ValueError('Digitization and concrete review notes required')
+    if accepted and panel.get('refinement'):
+        unresolved={(r['label'],r['point_index']):r for r in panel['refinement']['points'] if r['status']=='needs_review'}
+        decisions={}
+        for item in point_reviews or []:
+            key=(item['label'],item['point_index'])
+            if key in decisions or key not in unresolved or item.get('decision')!='keep_coarse' or not item.get('notes','').strip():
+                raise ValueError('Each unresolved point needs a unique keep_coarse decision with source-based notes; correct wrong points by resubmitting')
+            decisions[key]=item
+        if set(decisions)!=set(unresolved):raise ValueError('Resolve every flagged refinement point individually before acceptance')
+        for key,row in unresolved.items():row['manual_review']=decisions[key]
     panel['status']='accepted' if accepted else 'needs_correction'
     panel['review']=review_notes;save(root/'job.json',job)
     return {'panel_id':panel_id,'status':panel['status']}
 
 def job_status(job_id):
     _,job=load_job(job_id)
-    return {'job_id':job_id,'papers':len(job['papers']),'panels':[{k:p[k] for k in ['id','paper_id','label','status']} for p in job['panels']],
+    return {'job_id':job_id,'papers':len(job['papers']),'panels':[{**{k:p[k] for k in ['id','paper_id','label','status']},'unresolved_refinement':sum(r['status']=='needs_review' and not r.get('manual_review') for r in p.get('refinement',{}).get('points',[]))} for p in job['panels']],
             'points':sum(len(s['points']) for p in job['panels'] for s in p.get('series',[])),'exports':job.get('exports',[]),
             'digitizer':'getdata','last_getdata_attempt':job.get('last_getdata_attempt'),'getdata_exports':job.get('getdata_exports',[])}
 
@@ -192,6 +255,8 @@ def export_workbook(job_id,coverage_notes):
     root,job=load_job(job_id)
     if not coverage_notes.strip():raise ValueError('Explain how all red frames/pages were checked')
     if not job['panels'] or any(p['status']!='accepted' for p in job['panels']):raise ValueError('All panels must pass visual review before export')
+    if any(r['status']=='needs_review' and not r.get('manual_review') for p in job['panels'] for r in p.get('refinement',{}).get('points',[])):
+        raise ValueError('Unresolved refinement points block export')
     for paper in job['papers']:
         panels=[p for p in job['panels'] if p['paper_id']==paper['id']]
         if not panels:raise ValueError(f'Paper {paper["id"]} has no accepted panels; incomplete export blocked')

@@ -15,3 +15,6 @@
 测试：Node `--test test/plugin.test.mjs` 验证注册契约与失败情况；backend/self_test.py 验证 Python MCP 与 Excel 数值。这些不是在真实 Harness 桌面中做过安装的证明。真实客户端安装仍需验证版本、附件能力、支持图片的模型、工具发现与一次图像任务。
 
 导出后：PNG 是数据摘要，不是实际 Excel 渲染；用 Harness office_render 验收版式。报告 requires_recalculation=true 时先 office_recalculate。后端不算公式。遇到复杂模板对象导致拒绝导出应如实报告，不能绕过保护或保证原生功能完整保留。
+
+
+0.4.0 新增 refine_panel_points。模型先提交粗点，再按同一裁图像素提供每系列标记形状/半径/线宽。必须查看全部精修叠加图与放大图；每个 needs_review 点在 review_panel 中提供独立 keep_coarse 与原图核验说明。粗点不对则重新 submit 修正；不允许用笼统备注绕过，或将启发式分数当统计置信度。程序不会新增观测点、改轴或改标签，精修/重提撤销旧复核。旧手动任务保留兼容。新服务有 9 工具，配置 schemaVersion 仍为 3。

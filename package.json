@@ -1,6 +1,6 @@
 {
   "name": "dsh-redframe-digitizer",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "DeepSeek Harness MCP plugin: reviewed PDF marker coordinates, native GetData Windows export, and Excel templates",
   "repository": {
     "type": "git",
@@ -22,7 +22,8 @@
     "AGENTS.md",
     "backend/*.py",
     "backend/*.cmd",
-    "backend/requirements.txt"
+    "backend/requirements.txt",
+    "docs/*.md"
   ],
   "keywords": [
     "dsh-plugin",
