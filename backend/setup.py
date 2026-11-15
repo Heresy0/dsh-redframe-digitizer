@@ -37,11 +37,12 @@ def configure():
         run(cmd)
     run([python,'-c',"import mcp,pypdf,pypdfium2,numpy,PIL,openpyxl;print('MCP/PDF/Office imports OK')"])
     run([python,BASE/'self_test.py','--getdata-exe',getdata])
+    run([python,BASE/'batch_self_test.py','--getdata-exe',getdata])
     # Write connection state only after the complete self-test passes.
-    runtime={'schemaVersion':3,'engine':'openpyxl','digitizer':'getdata','getdata':{'executable':str(getdata)},'python':str(python),'basePython':sys.executable,'openpyxlVersion':office.__version__}
+    runtime={'schemaVersion':3,'toolsetVersion':5,'toolCount':11,'engine':'openpyxl','digitizer':'getdata','getdata':{'executable':str(getdata)},'python':str(python),'basePython':sys.executable,'openpyxlVersion':office.__version__}
     old=BASE/'runtime.json'
-    if old.exists() and json.loads(old.read_text(encoding='utf-8')).get('schemaVersion')!=3:
-        (BASE/'runtime.before-0.3.local.json').write_text(old.read_text(encoding='utf-8'),encoding='utf-8')
+    if old.exists() and json.loads(old.read_text(encoding='utf-8')).get('toolsetVersion')!=5:
+        (BASE/'runtime.before-0.5.local.json').write_text(old.read_text(encoding='utf-8'),encoding='utf-8')
     old.write_text(json.dumps(runtime,ensure_ascii=False,indent=2),encoding='utf-8')
     server={'command':str(python),'args':[str(BASE/'server.py')]}
     (BASE/'mcp-client.json').write_text(json.dumps({'mcpServers':{'redframe_digitizer':server}},ensure_ascii=False,indent=2),encoding='utf-8')

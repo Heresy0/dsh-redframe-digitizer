@@ -31,7 +31,7 @@ async def main():
  params=StdioServerParameters(command=sys.executable,args=[str(BASE/'server.py')],env=env)
  async with stdio_client(params) as (r,w):
   async with ClientSession(r,w) as session:
-   init=await session.initialize();assert 'refine_panel_points' in (init.instructions or ''),'Refinement workflow must be embedded in server instructions';listing=await session.list_tools();assert len(listing.tools)==9
+   init=await session.initialize();assert 'refine_panel_points' in (init.instructions or ''),'Refinement workflow must be embedded in server instructions';listing=await session.list_tools();assert len(listing.tools)==11
    job=unpack(await session.call_tool('prepare_job',{'pdf_paths':[str(folder/'synthetic.pdf')],'template_path':str(folder/'template.xlsx')}));jid=job['job_id']
    assert job['papers'][0]['candidates'],'Synthetic red frame was not detected'
    refused=await session.call_tool('export_workbook',{'job_id':jid,'coverage_notes':'Must reject incomplete data'});assert refused.isError
@@ -50,9 +50,9 @@ async def main():
    final_result=await session.call_tool('export_workbook',{'job_id':jid,'coverage_notes':'Single synthetic PDF, one panel, six independently specified synthetic coordinates; this is a programmatic export regression.'})
    if not args.getdata_exe:
     assert final_result.isError and 'GetData is not configured' in str(final_result.content),'No-desktop CI must refuse export without fallback'
-    report={'ok':True,'tools':9,'refined_points':2,'desktop_export_tested':False,'missing_getdata_refused':True,'synthetic_input_only':True}
+    report={'ok':True,'tools':11,'refined_points':2,'desktop_export_tested':False,'missing_getdata_refused':True,'synthetic_input_only':True}
     (BASE/'selftest_report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
-    print('MCP PORTABLE CHECK PASSED: 9 tools, coarse -> refinement -> per-point review verified; missing GetData refused. Desktop export NOT tested.');return
+    print('MCP PORTABLE CHECK PASSED: 11 tools, coarse -> refinement -> per-point review verified; missing GetData refused. Desktop export NOT tested.');return
    final=unpack(final_result)
    assert final['validation']['points']==6 and final['validation']['engine']=='openpyxl'
    assert final['validation']['digitizer']=='getdata' and final['validation']['getdata_executed'] is True
@@ -70,7 +70,7 @@ async def main():
     zero=sheet.find('.//s:c[@r="C2"]',ns);styles=E.fromstring(z.read('xl/styles.xml'));fmt=list(styles.find('s:cellXfs',ns))[int(zero.get('s','0'))].get('numFmtId')
     custom={c.get('numFmtId'):c.get('formatCode') for c in styles.findall('s:numFmts/s:numFmt',ns)}
     assert fmt=='1' or custom.get(fmt)=='0','Zero must use integer format'
-   report={'ok':True,'tools':9,'points':6,'refined_points':2,'desktop_export_tested':True,'synthetic_input_only':True,'workbook':final['workbook'],'getdata_evidence':proof}
-   (BASE/'selftest_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');print('MCP GETDATA SELF-TEST PASSED: coarse -> refinement -> review -> actual GetData -> TXT -> Excel, 9 tools, 2 curves/6 points, Excel XML and zero format checked.')
+   report={'ok':True,'tools':11,'points':6,'refined_points':2,'desktop_export_tested':True,'synthetic_input_only':True,'workbook':final['workbook'],'getdata_evidence':proof}
+   (BASE/'selftest_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');print('MCP GETDATA SELF-TEST PASSED: coarse -> refinement -> review -> actual GetData -> TXT -> Excel, 11 tools, 2 curves/6 points, Excel XML and zero format checked.')
 
 if __name__=='__main__':asyncio.run(main())

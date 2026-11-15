@@ -19,6 +19,8 @@ jobs:
       - run: python backend/test_export.py
       - run: python backend/test_getdata.py
       - run: python backend/test_refinement.py
+      - run: python backend/test_batch.py
       - run: python backend/self_test.py
+      - run: python backend/batch_self_test.py
       # CI has no GetData installation: self_test checks tool flow and mandatory refusal without GetData.
       # Actual desktop -> TXT -> Excel is tested locally with --getdata-exe PATH.

@@ -35,6 +35,17 @@ def file_hash(path):
         for b in iter(lambda:stream.read(1024*1024),b''): h.update(b)
     return h.hexdigest()
 
+def panel_revision(root,panel):
+    """Bind review to semantic inputs, selected points, source pixels and revision ID."""
+    keys=('id','paper_id','page','label','box_points','image','image_size','title','metric','x_unit','y_unit','calibration','series','revision_id')
+    data={k:panel.get(k) for k in keys}
+    refinement=deepcopy(panel.get('refinement'))
+    if refinement:
+        for point in refinement['points']:point.pop('manual_review',None)
+    data['refinement']=refinement
+    data['image_sha256']=file_hash(asset(root,panel['image']))
+    return hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=True,allow_nan=False).encode()).hexdigest()
+
 def inspect_template(path):
     with zipfile.ZipFile(path) as z:
         w=ET.fromstring(z.read('xl/workbook.xml'))
@@ -131,6 +142,11 @@ def convert(pixel,anchors,scale):
 
 def submit_digitization(job_id,panel_id,title,metric,x_unit,y_unit,calibration,series):
     root,job=load_job(job_id);p=next(p for p in job['panels'] if p['id']==panel_id)
+    result=_submit_panel(root,p,title,metric,x_unit,y_unit,calibration,series)
+    save(root/'job.json',job)
+    return result
+
+def _submit_panel(root,p,title,metric,x_unit,y_unit,calibration,series):
     if not title.strip() or not metric.strip() or not series:raise ValueError('Title, metric, series required')
     sx=calibration.get('x_scale','linear');sy=calibration.get('y_scale','linear')
     image=Image.open(asset(root,p['image'])).convert('RGB');draw=ImageDraw.Draw(image);colors=['red','blue','green','magenta','orange','cyan']
@@ -155,8 +171,8 @@ def submit_digitization(job_id,panel_id,title,metric,x_unit,y_unit,calibration,s
     else:p.pop('getdata_project',None)
     # A resubmission always invalidates any prior acceptance.
     p.pop('refinement',None)
-    p.pop('review',None);save(root/'job.json',job)
-    return {'panel_id':panel_id,'status':p['status'],'overlay':p['overlay'],'getdata_project':p.get('getdata_project'),
+    p.pop('review',None);p.pop('accepted_revision',None);p['revision_id']=uuid.uuid4().hex
+    return {'panel_id':p['id'],'revision':panel_revision(root,p),'status':p['status'],'overlay':p['overlay'],'getdata_project':p.get('getdata_project'),
         'curves':len(records),'points':sum(len(s['points']) for s in records),'data':records,
         'next':'View overlay and source legend, then call review_panel. These are calculated preview coordinates. export_workbook will run GetData and use its actual TXT values; only linear-axis export is currently verified.'}
 
@@ -178,8 +194,13 @@ def write_gdw(path,image,panel):
 
 def refine_panel_points(job_id,panel_id,marker_specs):
     """Bounded proposals from clean source pixels; unknown/ambiguous markers stay put."""
-    from refine_points import refine_series
     root,job=load_job(job_id);p=next(p for p in job['panels'] if p['id']==panel_id)
+    result=_refine_panel(root,p,marker_specs)
+    save(root/'job.json',job)
+    return result
+
+def _refine_panel(root,p,marker_specs):
+    from refine_points import refine_series
     if not p.get('series'):raise ValueError('Submit coarse digitization first')
     original=Image.open(asset(root,p['image'])).convert('RGB')
     rows=refine_series(original,p['series'],marker_specs)
@@ -221,15 +242,20 @@ def refine_panel_points(job_id,panel_id,marker_specs):
         path=folder/f'refinement_patches_{start//12+1}.png';sheet.save(path);patches.append(str(path.relative_to(root)))
     p.update(series=records,status='awaiting_review',overlay=str((folder/'refinement_overlay.png').relative_to(root)),
              refinement={'algorithm':'local_shape_dice_v1','marker_specs':marker_specs,'points':rows,'patches':patches})
-    p.pop('review',None)
+    p.pop('review',None);p.pop('accepted_revision',None);p['revision_id']=uuid.uuid4().hex
     if p.get('getdata_project'):write_gdw(asset(root,p['getdata_project']),asset(root,p['image']),p)
-    save(root/'job.json',job)
-    return {'panel_id':panel_id,'status':p['status'],'overlay':p['overlay'],'patches':patches,'refined':sum(r['status']=='refined' for r in rows),
+    return {'panel_id':p['id'],'revision':panel_revision(root,p),'status':p['status'],'overlay':p['overlay'],'patches':patches,'refined':sum(r['status']=='refined' for r in rows),
             'unresolved':sum(r['status']=='needs_review' for r in rows),'points':rows,
             'next':'View overlay AND every patch sheet. Cyan is coarse, magenta selected, orange candidate. Scores are heuristic, not probability. Each unresolved point needs an explicit keep_coarse decision and source-based note in review_panel; if wrong, resubmit corrected coordinates. Acceptance is never automatic.'}
 
-def review_panel(job_id,panel_id,accepted,review_notes,point_reviews=None):
+def review_panel(job_id,panel_id,accepted,review_notes,point_reviews=None,expected_revision=None):
     root,job=load_job(job_id);panel=next(p for p in job['panels'] if p['id']==panel_id)
+    _review_panel(root,panel,accepted,review_notes,point_reviews,expected_revision)
+    save(root/'job.json',job)
+    return {'panel_id':panel_id,'status':panel['status'],'revision':panel_revision(root,panel)}
+
+def _review_panel(root,panel,accepted,review_notes,point_reviews=None,expected_revision=None):
+    if expected_revision is not None and expected_revision!=panel_revision(root,panel):raise ValueError('Stale panel revision; inspect current overlay and patches before reviewing')
     if panel['status']=='needs_digitization' or not review_notes.strip():raise ValueError('Digitization and concrete review notes required')
     if accepted and panel.get('refinement'):
         unresolved={(r['label'],r['point_index']):r for r in panel['refinement']['points'] if r['status']=='needs_review'}
@@ -242,17 +268,73 @@ def review_panel(job_id,panel_id,accepted,review_notes,point_reviews=None):
         if set(decisions)!=set(unresolved):raise ValueError('Resolve every flagged refinement point individually before acceptance')
         for key,row in unresolved.items():row['manual_review']=decisions[key]
     panel['status']='accepted' if accepted else 'needs_correction'
-    panel['review']=review_notes;save(root/'job.json',job)
-    return {'panel_id':panel_id,'status':panel['status']}
+    panel['review']=review_notes
+    if accepted:panel['accepted_revision']=panel_revision(root,panel)
+    else:panel.pop('accepted_revision',None)
+
+def submit_and_refine(job_id,panel_id,title,metric,x_unit,y_unit,calibration,series,marker_specs):
+    """One deterministic stage; commit job state only after submit AND refine succeed."""
+    from refine_points import validate_spec
+    if not marker_specs:raise ValueError('Marker specs required; use shape=manual for unknown markers')
+    labels=[s['label'].strip() for s in series];spec_labels=[s['label'] for s in marker_specs]
+    if len(set(spec_labels))!=len(spec_labels) or set(labels)!=set(spec_labels):raise ValueError('Provide exactly one marker spec for every series')
+    for spec in marker_specs:validate_spec(spec)
+    root,job=load_job(job_id)
+    index=next(i for i,p in enumerate(job['panels']) if p['id']==panel_id)
+    panel=deepcopy(job['panels'][index])
+    stage=root/'panels'/panel_id/'revisions'/uuid.uuid4().hex;stage.mkdir(parents=True)
+    shutil.copy2(asset(root,panel['image']),stage/'image.png')
+    panel['image']=str((stage/'image.png').relative_to(root));panel.pop('getdata_project',None)
+    try:
+        _submit_panel(root,panel,title,metric,x_unit,y_unit,calibration,series)
+        result=_refine_panel(root,panel,marker_specs)
+        job['panels'][index]=panel
+        save(root/'job.json',job)
+    except Exception as exc:
+        save(stage/'error.json',{'error':str(exc),'state_committed':False})
+        raise RuntimeError('submit_and_refine failed; previous panel state preserved. Diagnostics: '+str(stage/'error.json')+'; '+str(exc)) from exc
+    return {**result,'stage':'awaiting_visual_review','job_id':job_id,
+            'next':'Inspect this revision overlay and EVERY patch sheet. Then submit actual per-point decisions via review_and_export with expected_revision. This stage never accepts panels or exports.'}
+
+def review_and_export(job_id,reviews,coverage_notes):
+    """Preflight ALL supplied decisions on a copy; persist valid reviews, then export."""
+    if not reviews:raise ValueError('At least one explicit panel review required; use export_workbook to retry already accepted data')
+    root,job=load_job(job_id);trial=deepcopy(job);seen=set();revisions={}
+    for review in reviews:
+        pid=review['panel_id'];expected=review.get('expected_revision')
+        if pid in seen:raise ValueError('Duplicate panel review')
+        if not isinstance(expected,str) or not re.fullmatch(r'[a-f0-9]{64}',expected):raise ValueError('expected_revision from current refinement result is required')
+        seen.add(pid)
+        panel=next((p for p in trial['panels'] if p['id']==pid),None)
+        if panel is None:raise ValueError('Unknown panel ID')
+        _review_panel(root,panel,True,review['review_notes'],review.get('point_reviews'),expected)
+        revisions[pid]=expected
+    # Check coverage, every pending panel, unresolved points, titles and axes BEFORE writes.
+    _validate_export(root,trial,coverage_notes)
+    trial['last_batch']={'phase':'reviewed','panel_revisions':revisions,'reviewed_panels':len(reviews)}
+    save(root/'job.json',trial)
+    try:
+        result=export_workbook(job_id,coverage_notes)
+    except Exception as exc:
+        _,latest=load_job(job_id)
+        latest['last_batch'].update(phase='export_failed',error=str(exc),resume='Resolve the export error, then call export_workbook with the same job_id and coverage_notes; valid reviews remain saved')
+        save(root/'job.json',latest)
+        raise RuntimeError('Reviews saved; export failed. Inspect job_status.last_batch and GetData evidence; retry export_workbook without repeating valid reviews. '+str(exc)) from exc
+    _,latest=load_job(job_id);latest['last_batch'].update(phase='exported',workbook=result['workbook']);save(root/'job.json',latest)
+    return {**result,'stage':'exported','reviewed_panels':len(reviews)}
 
 def job_status(job_id):
-    _,job=load_job(job_id)
-    return {'job_id':job_id,'papers':len(job['papers']),'panels':[{**{k:p[k] for k in ['id','paper_id','label','status']},'unresolved_refinement':sum(r['status']=='needs_review' and not r.get('manual_review') for r in p.get('refinement',{}).get('points',[]))} for p in job['panels']],
+    root,job=load_job(job_id)
+    return {'job_id':job_id,'papers':len(job['papers']),'panels':[{**{k:p[k] for k in ['id','paper_id','label','status']},'revision':panel_revision(root,p),'unresolved_refinement':sum(r['status']=='needs_review' and not r.get('manual_review') for r in p.get('refinement',{}).get('points',[]))} for p in job['panels']],
             'points':sum(len(s['points']) for p in job['panels'] for s in p.get('series',[])),'exports':job.get('exports',[]),
-            'digitizer':'getdata','last_getdata_attempt':job.get('last_getdata_attempt'),'getdata_exports':job.get('getdata_exports',[])}
+            'digitizer':'getdata','last_getdata_attempt':job.get('last_getdata_attempt'),'last_batch':job.get('last_batch'),'getdata_exports':job.get('getdata_exports',[])}
 
 def export_workbook(job_id,coverage_notes):
     root,job=load_job(job_id)
+    _validate_export(root,job,coverage_notes)
+    return _export_workbook(root,job,coverage_notes)
+
+def _validate_export(root,job,coverage_notes):
     if not coverage_notes.strip():raise ValueError('Explain how all red frames/pages were checked')
     if not job['panels'] or any(p['status']!='accepted' for p in job['panels']):raise ValueError('All panels must pass visual review before export')
     if any(r['status']=='needs_review' and not r.get('manual_review') for p in job['panels'] for r in p.get('refinement',{}).get('points',[])):
@@ -261,11 +343,14 @@ def export_workbook(job_id,coverage_notes):
         panels=[p for p in job['panels'] if p['paper_id']==paper['id']]
         if not panels:raise ValueError(f'Paper {paper["id"]} has no accepted panels; incomplete export blocked')
         if len(set(p['title'] for p in panels))!=1:raise ValueError('Inconsistent article titles across panels')
-    # No fallback: every accepted panel must pass a real GetData desktop export.
-    from getdata_adapter import executable_from_config,export_panel
     for panel in job['panels']:
+        if panel.get('accepted_revision') and panel['accepted_revision']!=panel_revision(root,panel):raise ValueError('Accepted panel changed; review the current revision again')
         if any(panel['calibration'].get(k,'linear')!='linear' for k in ('x_scale','y_scale')):
             raise ValueError('GetData adapter currently verifies linear axes only; log-axis export is blocked, without fallback')
+
+def _export_workbook(root,job,coverage_notes):
+    # No fallback: every accepted panel must pass a real GetData desktop export.
+    from getdata_adapter import executable_from_config,export_panel
     executable=executable_from_config(BASE)
     run=root/'getdata_exports'/uuid.uuid4().hex;run.mkdir(parents=True)
     job['last_getdata_attempt']=str(run.relative_to(root));save(root/'job.json',job)

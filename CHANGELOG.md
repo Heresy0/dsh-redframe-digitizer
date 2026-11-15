@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- 新增标准 redframe-digitize skill，以 Harness 官方可选 skills 注入原生注册；日常指导与安装维护分离。
+- 新增 submit_and_refine、review_and_export；保留原 9 工具，总计 11 工具。
+- 独立 revision 派生文件、旧图复核版本校验、整批意见预检、导出失败保留有效复核，支持直接重试导出。
+- 单步/批处理真实 MCP 与 GetData 输出一致性测试；两面板状态变更调用从 7 次降至 3 次，图像观察仍保留。
+- 安装器加入批处理对照自检，toolsetVersion=5，拒绝旧 9 工具 backend 配置。
+
 ## 0.4.0
 
 - 新增 refine_panel_points：基于明确形状/大小提示的局部中心匹配，保留粗点、候选、选用点及启发式分数。

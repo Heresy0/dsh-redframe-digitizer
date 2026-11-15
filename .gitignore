@@ -17,3 +17,5 @@ backend/.codex/
 *.tgz
 .env
 *.log
+
+backend/batch_selftest_report.json

@@ -1,14 +1,51 @@
 # Redframe Digitizer for DeepSeek Harness
 
-PDF 红框曲线均值点 → GetData 实际导出 → Excel 模板。插件提供 9 个本地 MCP 工具。
+PDF 红框曲线均值点 → GetData 实际导出 → Excel 模板。插件提供 11 个本地 MCP 工具。
 
-**0.4.0：GetData 2.20 实际负责坐标计算与 TXT 导出；Excel 只读取已核验的真实 TXT。导出失败立即停止，没有计算后备。** 使用 Harness Python 的 openpyxl 写表，不依赖 Codex 或其专有运行库。
+**0.5.0：GetData 2.20 实际负责坐标计算与 TXT 导出；Excel 只读取已核验的真实 TXT。导出失败立即停止，没有计算后备。** 使用 Harness Python 的 openpyxl 写表，不依赖 Codex 或其专有运行库。
 
 仓库：[Heresy0/dsh-redframe-digitizer](https://github.com/Heresy0/dsh-redframe-digitizer)。Harness 插件来源：`github:Heresy0/dsh-redframe-digitizer`。源码 MIT，不分发 GetData 安装包、许可证或破解文件。
 
+## 0.5.0：日常 skill 与 MCP 批处理
+
+固定程序阶段通过两个新增 MCP 工具执行；skill 负责指导模型何时调用、何时停下来识图/复核，本身不是自动执行引擎。
+
+```text
+prepare_job（程序准备）
+→ 模型确认红框、裁图、识别标定/图例/粗点
+→ submit_and_refine（提交、校验、预览、精修、生成复核图）
+→ 模型查看叠加图与全部放大图，形成逐点复核意见
+→ review_and_export（整批复核预检、实际 GetData、TXT 校验、Excel）
+→ 模型按需验收版式并交付
+```
+
+原有 9 个单步工具继续保留，现在共 11 个工具。正常任务优先用批处理；局部纠错、长任务复核检查点及导出失败重试仍可使用单步工具。批处理不跳过模型视觉判断，不自动批准候选点。
+
+### Skill 在 Harness 中如何加载
+
+标准 skill 位于 [skills/redframe-digitize/SKILL.md](skills/redframe-digitize/SKILL.md)，参数细节按需读其 references。原生插件通过官方 `ctx.inject(['skills'], ...)` 可选注入和 `ctx.skills.register(...)` 注册 `redframe-digitize`，随插件生命周期管理。已有 skill registry 和模型侧 loader 时，模型可以发现并加载；用户也可使用 `/redframe-digitize`。未挂载 skills 服务或 loader 时，不阻塞 MCP，但不能声称 skill 已加载。
+
+直接连接 MCP 的用户可以在 Harness 已有 skill-filesystem 的 `customSkillDirs` 中增补本仓库 `skills` 的实际绝对路径，保留已有目录。不要把普通 `skills/` 误认为所有客户端默认扫描路径；也可明确让助手读取 SKILL.md 作为工作指导。其他支持标准 SKILL.md 的客户端可按各自方式发现。完整批处理流程仍保存在 MCP server instructions，因此不依赖 MCP prompts 或 skill 加载成功才可调用工具。
+
+安装后分别验收：①11 个 MCP 工具；②`redframe-digitize` 能发现/加载，且相对 reference 可读；③模型实际接收到 view_job_image 图片。前两项不能代替第三项。项目只做了官方接口契约测试，尚未在真实 Harness 桌面完整重装验收。
+
+官方依据：[skill registry](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/skill/skill/README.md)、[filesystem roots](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/skill/skill-filesystem/README.md)、[model/user skill loader](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/skill/tool-skill/README.md)。
+
+### 批处理的一致性和失败恢复
+
+- `submit_and_refine` 在独立 revision 目录写派生文件，两步都成功后才提交面板。失败保留旧状态和旧复核图；失败 revision 仅是诊断文件。
+- 结果返回 `revision`。看完该版本图片后，批量复核提交 `expected_revision`；旧版本或源像素变化会被拒绝。单步 review_panel 也支持可选 expected_revision。
+- `review_and_export` 先在副本上验证所有复核意见、待复核点、标题、覆盖和轴类型。任一不符则不提交任何复核。
+- 预检通过后保存有效复核，再实际导出。软件导出失败会记录 `job_status.last_batch.phase=export_failed`，旧成功工作簿不会冒充新结果；解决故障后可直接重试 export_workbook，无需重做有效复核。
+- 同一个 job 仍需串行写入；这是本地阶段提交，不是数据库事务或跨进程任务锁。
+
+真实 MCP 对照测试：两个合成面板、每条路径 12 点，单步与批处理均实际调用 GetData；独立读取 Excel XML，标签/点数/数值一致。状态变更调用从 7 次变为 3 次，排除两边相同的准备、看图、状态查询；不代表实测模型轮数、总 token 或总耗时减少相同比例。[详细验证](docs/batch-validation.md)
+
+升级到 0.5：更新 GitHub 插件本体和实际 backend 源码（可能位于两个目录），重新运行安装器验收，再重载插件或重启 Harness 并重连 MCP。仅重启 MCP 进程不会更新仍在内存中的旧插件代码/skill 注册。配置 schemaVersion 仍为 3，新增 toolsetVersion=5、toolCount=11；旧 9 工具后端会被新插件明确拒绝，避免 skill 调用不存在的工具。任务数据保留。
+
 ## 给 DeepSeek / AI 助手的自动安装入口
 
-用户以安装或使用本插件为目的提供本仓库链接时，请先阅读本 README 和 [AGENTS.md](AGENTS.md)，再依次完成下面的本机安装与验收。不要只回复安装教程；有本地执行与配置能力时，实际完成常规步骤。若只是浏览、审查源码等其他请求，应按用户当次目的处理。
+当前 MCP 已连接时，默认加载日常 skill 处理数据，不执行安装。用户明确要求安装/升级/重新配置，或首次以安装为目的提供本仓库链接时，请先阅读本 README 和 [AGENTS.md](AGENTS.md)，再依次完成下面的本机安装与验收。不要只回复安装教程；有本地执行与配置能力时，实际完成常规步骤。若只是浏览、审查源码等其他请求，应按用户当次目的处理。
 
 用户只需提供本仓库链接；解释器、GetData 路径和连接文件优先在本机发现或生成。缺少必要工具、存在无法判断的多个安装版本、找不到软件或受到权限限制时，应明确报告具体缺项，必要时只询问该缺项。本文不保证所有 Harness 版本或模型都具备安装、配置及看图能力；遵循所在客户端的权限规则。
 
@@ -32,7 +69,7 @@ PDF 红框曲线均值点 → GetData 实际导出 → Excel 模板。插件提�
 
 首次安装不要传 `--skip-deps`。安装器在 backend 的独立虚拟环境中安装依赖，并执行“粗定位 → 中心精修 → 逐点复核 → 实际 GetData → TXT → Excel”合成自检。保持桌面会话可用，允许测试窗口正常运行。
 
-必须确认命令退出码为 0、出现 `INSTALLATION AND SELF-TEST PASSED`，且生成的 `backend/selftest_report.json` 中 `ok=true`、`desktop_export_tested=true`、`tools=9`。默认不带 `--getdata-exe` 的 self_test.py 仅验证无 GetData 时拒绝导出，不能代替实际软件自检。失败时读取报错及本次任务的证据日志后排查；不要跳过检查、伪造配置或改成计算后备导出。
+安装器还会执行单步/批处理对照测试。必须确认命令退出码为 0、出现 `INSTALLATION AND SELF-TEST PASSED`，且生成的 `backend/selftest_report.json` 中 `ok=true`、`desktop_export_tested=true`、`tools=11`。默认不带 `--getdata-exe` 的 self_test.py 仅验证无 GetData 时拒绝导出，不能代替实际软件自检。失败时读取报错及本次任务的证据日志后排查；不要跳过检查、伪造配置或改成计算后备导出。
 
 ### 3. 连接 Harness，保留已有配置
 
@@ -43,12 +80,12 @@ PDF 红框曲线均值点 → GetData 实际导出 → Excel 模板。插件提�
 
 ### 4. 在真实 Harness 中验收
 
-1. 确认能发现 9 个 `mcp__redframe_digitizer__...` 工具，至少核对 `prepare_job`、`refine_panel_points`、`export_workbook`。
+1. 确认能发现 11 个 `mcp__redframe_digitizer__...` 工具，至少核对 prepare_job、submit_and_refine、review_and_export；使用原生插件时另检查 redframe-digitize skill 可发现/加载。
 2. 使用安装自检创建的合成任务调用 `view_job_image`，确认图片实际进入当前模型上下文，模型能够描述图中内容。工具返回成功或工具列表可见，都不能单独证明模型收到了图片。
 3. 确认合成任务的 Excel 已生成且实际 GetData 导出证据验证通过。若 Harness 的 `office_render` 可用，可用该合成工作簿检查版式。
 4. 当前模型不能接收图片时，报告“后端/连接已通过，但当前模型图片能力尚未验收”，按客户端支持方式选择具备图片输入能力的模型后继续；不要声称已经可以识图提取论文。
 
-完成后向用户简报：源码目录、Python/GetData 实际路径、使用的连接方式、软件自检/9 工具/模型图片接收各自的验收结果，以及任何尚未完成的步骤。不要输出或上传账号密钥、本机 runtime.json 或用户文献。
+完成后向用户简报：源码目录、Python/GetData 实际路径、使用的连接方式、软件自检/11 工具/模型图片接收各自的验收结果，以及任何尚未完成的步骤。不要输出或上传账号密钥、本机 runtime.json 或用户文献。
 
 安装验收完成后，用户直接发送 PDF 和 Excel 模板即可，例如：
 
@@ -120,7 +157,7 @@ Harness 插件：从 `github:Heresy0/dsh-redframe-digitizer` 安装插件，再�
 
 installDir 必须指向已运行安装器的 backend；GitHub 插件的下载副本不会继承另一个目录的 venv。也可用 `REDFRAME_INSTALL_DIR`。不要与同名直接 MCP 配置同时启用。插件通过 mcpManager 注册 stdio 服务，不自动执行安装器。
 
-基于此前验证的 Harness 0.2.2-rc.3 注册接口；本次验证覆盖本机 MCP 和 GetData，未在真实 Harness 桌面中重新安装验收。模型需支持图片，附件功能需可用。连接成功后确认 9 工具可见，并用 `view_job_image` 验证模型确实收到图像。完整流程已放在 server instructions，不依赖 MCP prompts 支持。
+基于此前验证的 Harness 0.2.2-rc.3 注册接口；本次验证覆盖本机 MCP 和 GetData，未在真实 Harness 桌面中重新安装验收。模型需支持图片，附件功能需可用。连接成功后确认 11 工具可见，并用 `view_job_image` 验证模型确实收到图像。完整流程已放在 server instructions，不依赖 MCP prompts 支持。
 
 ## 调用与输出
 
@@ -128,7 +165,7 @@ installDir 必须指向已运行安装器的 backend；GitHub 插件的下载副
 
 > 用 redframe_digitizer 提取这些 PDF 红框里的均值点，按模板填表。每篇一表，前三个单词命名。必须由 GetData 实际导出，核对 TXT 证据后给我最终 Excel。
 
-工具依次为 `prepare_job`、`read_paper`/`view_job_image`、`crop_panel`、`submit_digitization`、`refine_panel_points`、`review_panel`、`job_status`、`export_workbook`。页面裁框使用 PDF 点、左上角原点；取点使用工具返回裁图的同一 4 倍像素坐标。
+日常优先使用 `prepare_job`、`read_paper`/`view_job_image`、`crop_panel`、`submit_and_refine`，看完图后 `review_and_export`；`job_status` 用于续做与异常定位，原单步工具用于局部修正或导出重试。页面裁框使用 PDF 点、左上角原点；取点使用工具返回裁图的同一 4 倍像素坐标。
 
 每篇文献新建一表，名称采用标题前三词，重名追加序号。五列：文章标题／图片字母（原图 Y 轴指标）／X／Y／线段表示含义；逐行写全标签。保留模板原表；零显示 0，整数无尾点，不更改底层数值。
 
@@ -143,10 +180,12 @@ node --test test/plugin.test.mjs
 python backend/test_export.py
 python backend/test_getdata.py
 python backend/test_refinement.py
+python backend/test_batch.py
 python backend/self_test.py
+python backend/batch_self_test.py
 python backend/self_test.py --getdata-exe "本机GetData路径"
 ```
 
-前三项验证插件契约、模板保留和适配器数据来源/失败拒绝。默认 self_test 在 Windows/Linux CI 检查 9 工具、图像返回、复核流程和缺失 GetData 时的拒绝；不冒充桌面测试。只有显式 `--getdata-exe` 才实际验证 GetData → TXT → Excel 的已知六点与零格式。程序回归不等于模型识图准确率测试。
+前三项验证插件契约、模板保留和适配器数据来源/失败拒绝。默认 self_test 在 Windows/Linux CI 检查 11 工具、图像返回、复核流程和缺失 GetData 时的拒绝；不冒充桌面测试。只有显式 `--getdata-exe` 才实际验证 GetData → TXT → Excel 的已知六点与零格式。程序回归不等于模型识图准确率测试。
 
 本机还以旧文献两个子图执行了真实 MCP 回归。不要提交 jobs、真实 PDF/Excel、venv、runtime.json、账号密钥或 GetData 软件。
