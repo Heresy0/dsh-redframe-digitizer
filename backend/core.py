@@ -21,7 +21,7 @@ def save(path,value):
 
 def load_job(job_id):
     if not re.fullmatch(r'[a-f0-9]{32}',job_id): raise ValueError('Invalid job ID')
-    root=JOB_ROOT/job_id
+    root=(JOB_ROOT/job_id).resolve()
     return root,json.loads((root/'job.json').read_text(encoding='utf-8'))
 
 def asset(root,relative_path):

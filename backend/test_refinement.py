@@ -2,7 +2,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
-import math,unittest
+import math,unittest,os
 from PIL import Image,ImageDraw
 import numpy as np
 import core
@@ -93,5 +93,19 @@ class LocalRefinement(unittest.TestCase):
             result=core.refine_panel_points(jid,'p',[dict(label='a',shape='circle',radius=7)])
             row=result['points'][0];self.assertEqual(row['reason'],'zero_boundary_requires_review')
             self.assertEqual(row['selected'],[93,92]);self.assertLess(row['candidate'][0],93)
+
+    @unittest.skipUnless(os.name=='nt','Windows 8.3 path aliases only')
+    def test_short_path_job_root_uses_canonical_asset_paths(self):
+        import ctypes as C
+        fn=C.windll.kernel32.GetShortPathNameW;fn.argtypes=[C.c_wchar_p,C.c_wchar_p,C.c_uint];fn.restype=C.c_uint
+        with TemporaryDirectory(prefix='refinement long alias ') as d:
+            jid=self.job(Path(d));buf=C.create_unicode_buffer(32768)
+            if not fn(d,buf,len(buf)):self.skipTest('8.3 path not available on this volume')
+            short=Path(buf.value)
+            if short==Path(d).resolve():self.skipTest('Volume does not expose an alternate short path')
+            with patch.object(core,'JOB_ROOT',short):
+                result=core.refine_panel_points(jid,'p',[dict(label='a',shape='circle',radius=7)])
+                job_root,_=core.load_job(jid)
+                self.assertTrue(all((job_root/p).is_file() for p in result['patches']))
 
 if __name__=='__main__':unittest.main()
