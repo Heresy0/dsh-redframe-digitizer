@@ -1,49 +1,52 @@
-"""Configure this extracted copy. Never edits client global settings."""
+"""Install on top of the Python reported by Harness load_workspace_dependencies."""
 from pathlib import Path
-import argparse,os,platform,subprocess,sys,json,shutil
+import argparse,importlib,json,os,subprocess,sys,venv
 BASE=Path(__file__).resolve().parent
 
-def run(args,**kwargs):
- subprocess.run([str(x) for x in args],check=True,stdin=subprocess.DEVNULL,**kwargs)
+def run(args):subprocess.run([str(v) for v in args],check=True,stdin=subprocess.DEVNULL)
 
 def configure():
- parser=argparse.ArgumentParser()
- parser.add_argument('--node');parser.add_argument('--node-modules');parser.add_argument('--marker')
- args=parser.parse_args()
- if sys.platform!='win32' or sys.version_info[:2]!=(3,12) or platform.machine().upper() not in ('AMD64','X86_64'):
-  raise RuntimeError('This package requires Windows x64 and Python 3.12. Use matching Codex runtime or install Python 3.12 x64.')
- home=Path.home();deps=home/'.cache/codex-runtimes/codex-primary-runtime/dependencies'
- node=Path(args.node or deps/'node/bin/node.exe')
- if not node.is_file() and shutil.which('node'):node=Path(shutil.which('node'))
- modules=Path(args.node_modules or deps/'node/node_modules')
- markers=list((home/'.codex/plugins/cache/openai-primary-runtime/spreadsheets').glob('*/skills/spreadsheets/container_tools/mark_artifact_operation_started.mjs'))
- markers.sort(key=lambda p:p.stat().st_mtime,reverse=True)
- marker=Path(args.marker) if args.marker else (markers[0] if markers else None)
- if not node.is_file() or not (modules/'@oai/artifact-tool').is_dir() or marker is None or not marker.is_file():
-  raise RuntimeError('Codex spreadsheet runtime not found. Open this folder in Codex and ask the assistant to locate bundled Python/Node/node_modules and artifact marker; run setup.py --node PATH --node-modules PATH --marker PATH. GetData alone is insufficient. No client configuration was installed.')
- env=dict(os.environ);env.update(REDFRAME_NODE=str(node),REDFRAME_NODE_MODULES=str(modules),REDFRAME_ARTIFACT_MARKER=str(marker))
- # Verify the actual module rather than treating a directory as proof of compatibility.
- run([node,'-e',"const{createRequire}=require('module');const p=require('path');const r=createRequire(p.join(process.env.REDFRAME_NODE_MODULES,'package.json'));import(require('url').pathToFileURL(r.resolve('@oai/artifact-tool')).href).then(()=>console.log('Spreadsheet runtime OK'))"],env=env)
- venv=BASE/'.venv';python=venv/'Scripts/python.exe'
- if not python.is_file():run([sys.executable,'-m','venv','--without-pip',venv])
- install=[sys.executable,'-m','pip','--python',python,'install','-r',BASE/'requirements.txt','--disable-pip-version-check','--quiet']
- if (BASE/'wheelhouse').is_dir():install+=['--no-index','--find-links',BASE/'wheelhouse']
- else:print('Installing Python dependencies from your configured package index (network required).')
- run(install)
- runtime={'python':str(python),'env':{k:env[k] for k in ['REDFRAME_NODE','REDFRAME_NODE_MODULES','REDFRAME_ARTIFACT_MARKER']}}
- (BASE/'runtime.json').write_text(json.dumps(runtime,ensure_ascii=False,indent=2),encoding='utf-8')
- run([python,BASE/'self_test.py'],env=env)
- # Publish connection files only after a successful complete self-test.
- server={'command':str(python),'args':[str(BASE/'server.py')],'env':runtime['env']}
- (BASE/'mcp-client.json').write_text(json.dumps({'mcpServers':{'redframe_digitizer':server}},ensure_ascii=False,indent=2),encoding='utf-8')
- toml='[mcp_servers.redframe_digitizer]\ncommand = '+json.dumps(str(python))+'\nargs = '+json.dumps(server['args'])+'\nstartup_timeout_sec = 30\ntool_timeout_sec = 300\n\n[mcp_servers.redframe_digitizer.env]\n'
- toml+=''.join(k+' = '+json.dumps(v)+'\n' for k,v in runtime['env'].items())
- folder=BASE/'.codex';folder.mkdir(exist_ok=True);path=folder/'config.toml'
- if path.exists() and path.read_text(encoding='utf-8')!=toml:shutil.copy2(path,folder/'config.toml.before-setup.bak')
- path.write_text(toml,encoding='utf-8')
- print('\nINSTALLATION AND SELF-TEST PASSED.\nOpen this folder in Codex, or import mcp-client.json using your MCP client.\nMoving this extracted folder later requires running install.cmd again.')
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--harness-python',type=Path,help='Python returned by Harness load_workspace_dependencies')
+    parser.add_argument('--env-dir',type=Path,default=BASE/'.venv')
+    parser.add_argument('--wheelhouse',type=Path)
+    parser.add_argument('--skip-deps',action='store_true',help='For environments with all required dependencies already installed')
+    args=parser.parse_args()
+    if args.harness_python and args.harness_python.resolve()!=Path(sys.executable).resolve():
+        forwarded=[args.harness_python,Path(__file__).resolve(),'--env-dir',args.env_dir]
+        if args.wheelhouse:forwarded+=['--wheelhouse',args.wheelhouse]
+        if args.skip_deps:forwarded+=['--skip-deps']
+        run(forwarded);return
+    if sys.version_info<(3,11):raise RuntimeError('Python 3.11+ required; use the Python returned by Harness load_workspace_dependencies.')
+    try:office=importlib.import_module('openpyxl')
+    except ImportError:raise RuntimeError('This interpreter has no openpyxl. In Harness call load_workspace_dependencies and run setup.py with its Python, or pass --harness-python PATH.')
+    print('Using openpyxl '+office.__version__+' from the selected base Python',flush=True)
+    directory=args.env_dir.resolve()
+    # Inherit the Harness-managed Office libraries instead of copying or modifying its runtime.
+    venv.EnvBuilder(system_site_packages=True,with_pip=False).create(directory)
+    python=directory/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
+    if not args.skip_deps:
+        cmd=[sys.executable,'-m','pip','--python',python,'install','-r',BASE/'requirements.txt','--disable-pip-version-check','--quiet']
+        wheels=args.wheelhouse or (BASE/'wheelhouse' if (BASE/'wheelhouse').is_dir() else None)
+        if wheels:cmd+=['--no-index','--find-links',wheels]
+        else:print('Installing extra MCP/PDF dependencies from the configured Python package index (network required).',flush=True)
+        run(cmd)
+    run([python,'-c',"import mcp,pypdf,pypdfium2,numpy,PIL,openpyxl;print('MCP/PDF/Office imports OK')"])
+    run([python,BASE/'self_test.py'])
+    # Write connection state only after the complete self-test passes.
+    runtime={'schemaVersion':2,'engine':'openpyxl','python':str(python),'basePython':sys.executable,'openpyxlVersion':office.__version__}
+    old=BASE/'runtime.json'
+    if old.exists() and json.loads(old.read_text(encoding='utf-8')).get('engine')!='openpyxl':
+        (BASE/'runtime.before-0.2.local.json').write_text(old.read_text(encoding='utf-8'),encoding='utf-8')
+    old.write_text(json.dumps(runtime,ensure_ascii=False,indent=2),encoding='utf-8')
+    server={'command':str(python),'args':[str(BASE/'server.py')]}
+    (BASE/'mcp-client.json').write_text(json.dumps({'mcpServers':{'redframe_digitizer':server}},ensure_ascii=False,indent=2),encoding='utf-8')
+    entry={'id':'mcp-redframe','name':'@deepseek-ai/dsh-mcp-client','config':{'serverName':'redframe_digitizer','transport':'stdio',**server,'toolCallTimeoutMs':300000,'startupTimeoutMs':30000}}
+    (BASE/'harness-client.entry.json').write_text(json.dumps(entry,ensure_ascii=False,indent=2),encoding='utf-8')
+    # YAML accepts JSON-quoted scalar strings, including Windows paths.
+    (BASE/'harness-plugin.patch.yml').write_text('- id: redframe-digitizer\n  config:\n    installDir: '+json.dumps(str(BASE))+'\n',encoding='utf-8')
+    print('INSTALLATION AND SELF-TEST PASSED. Configure Harness with harness-client.entry.json, or use harness-plugin.patch.yml for the plugin. No separate spreadsheet runtime or Node exporter is required.')
 
 if __name__=='__main__':
- try:configure()
- except Exception as exc:
-  print('\nSETUP FAILED: '+str(exc),file=sys.stderr);sys.exit(1)
+    try:configure()
+    except Exception as exc:print('SETUP FAILED: '+str(exc),file=sys.stderr);sys.exit(1)

@@ -20,9 +20,11 @@ def unpack(result):
  return result.structuredContent or json.loads(result.content[0].text)
 
 async def main():
- runtime=json.loads((BASE/'runtime.json').read_text(encoding='utf-8'));env=dict(os.environ);env.update(runtime['env'])
+ env={k:v for k,v in os.environ.items() if not k.startswith(('CODEX','REDFRAME_NODE','REDFRAME_ARTIFACT'))}
  folder=BASE/'selftest';folder.mkdir(exist_ok=True);pdf_fixture(folder/'synthetic.pdf')
- subprocess.run([env['REDFRAME_NODE'],str(BASE/'export.mjs'),'--test-template',str(folder/'template.xlsx')],check=True,stdin=subprocess.DEVNULL,env=env,timeout=120)
+ from openpyxl import Workbook
+ from openpyxl.styles import PatternFill
+ wb=Workbook();sh=wb.active;sh.title='Template';sh.append(['文章标题','图片字母','X','Y','线段表示含义']);sh['A1'].fill=PatternFill('solid',fgColor='F2C000');sh['A2']='Keep original';wb.save(folder/'template.xlsx')
  params=StdioServerParameters(command=sys.executable,args=[str(BASE/'server.py')],env=env)
  async with stdio_client(params) as (r,w):
   async with ClientSession(r,w) as session:
@@ -37,7 +39,7 @@ async def main():
    view=await session.call_tool('view_job_image',{'job_id':jid,'relative_path':d['overlay']});assert view.content[0].type=='image'
    unpack(await session.call_tool('review_panel',{'job_id':jid,'panel_id':panel['id'],'accepted':True,'review_notes':'Synthetic fixed geometry: 3 known mean centers; anchors independently specified by fixture. This is a programmatic regression, not an AI recognition accuracy test.'}))
    final=unpack(await session.call_tool('export_workbook',{'job_id':jid,'coverage_notes':'Single synthetic PDF with one red-framed panel, 3 known marker points.'}))
-   assert final['validation']['points']==3
+   assert final['validation']['points']==3 and final['validation']['engine']=='openpyxl'
    ns={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
    with zipfile.ZipFile(final['workbook']) as z:
     sheet=E.fromstring(z.read('xl/worksheets/sheet2.xml'));values={c.get('r'):float(c.find('s:v',ns).text) for c in sheet.findall('.//s:c',ns) if c.get('t') not in ('s','str','inlineStr','e','b') and c.find('s:v',ns) is not None}

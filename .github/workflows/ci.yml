@@ -2,7 +2,10 @@ name: Source checks
 on: [push, pull_request]
 jobs:
   source:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -12,6 +15,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: node --test test/plugin.test.mjs
-      - run: python -m py_compile backend/server.py backend/core.py backend/setup.py backend/self_test.py
-      # Full PDF/Excel integration requires an existing Codex spreadsheet runtime.
-      # This CI job checks plugin contracts and Python syntax, not visual accuracy.
+      - run: python -m pip install -r backend/requirements.txt
+      - run: python backend/test_export.py
+      - run: python backend/self_test.py
+      # Synthetic point geometry verifies MCP/Excel flow, not model visual accuracy.

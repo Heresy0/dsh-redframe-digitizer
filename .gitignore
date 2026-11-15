@@ -1,11 +1,15 @@
 node_modules/
 backend/.venv/
+backend/.venv-*/
 backend/vendor/
 backend/wheelhouse/
 backend/__pycache__/
 backend/jobs/
 backend/selftest/
 backend/runtime.json
+backend/runtime.*.local.json
+backend/harness-client.entry.json
+backend/harness-plugin.patch.yml
 backend/mcp-client.json
 backend/selftest_report.json
 backend/.codex/

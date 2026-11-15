@@ -195,16 +195,10 @@ def export_workbook(job_id,coverage_notes):
         panels=[p for p in job['panels'] if p['paper_id']==paper['id']]
         payload['papers'].append({'id':paper['id'],'title':panels[0]['title'],'source':paper['source_name'],'panels':panels})
     payload_file=root/'export.json';save(payload_file,payload)
-    node=os.environ.get('REDFRAME_NODE') or shutil.which('node')
-    if not node:raise RuntimeError('Node missing; run install.cmd first')
-    # File-backed logs avoid inherited pipe handles keeping Windows child pipes open.
-    log_path=root/'export.log'
-    with log_path.open('w',encoding='utf-8') as log:
-        proc=subprocess.run([node,str(BASE/'export.mjs'),str(payload_file)],stdin=subprocess.DEVNULL,stdout=log,stderr=log,timeout=180,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-    if proc.returncode:raise RuntimeError('Workbook export failed: '+log_path.read_text(encoding='utf-8',errors='replace')[-4000:])
-    report=json.loads((root/'validation.json').read_text(encoding='utf-8'))
-    if report.get('ok') is not True:raise RuntimeError('Workbook failed validation')
+    from export_xlsx import export
+    report=export(payload)
+    save(root/'validation.json',report)
     job['exports'].append(str(output)) if 'exports' in job else job.update(exports=[str(output)])
     job['coverage_notes']=coverage_notes;job['status']='exported';save(root/'job.json',job)
     return {'workbook':str(output),'validation':report,'preview_dir':str(preview),
-        'next':'Inspect every worksheet preview and compare red-frame coverage. Export validation is numeric/structural, not independent scientific ground truth.'}
+        'next':'Data previews are not native workbook rendering. Use Harness office_render for workbook visual QA; if requires_recalculation is true, use office_recalculate first. Compare red-frame coverage. Structural checks are not scientific ground truth.'}

@@ -1,18 +1,24 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if exist "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" (
-  "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" "%~dp0setup.py" %*
-) else (
-  where py >nul 2>nul
-  if errorlevel 1 (
-    echo Python 3.12 x64 was not found. Install Python 3.12 x64 or initialize Codex local runtime, then try again.
-    pause
+if not "%~1"=="" (
+  if not exist "%~1" (
+    echo The supplied Harness Python path does not exist.
     exit /b 1
   )
-  py -3.12 "%~dp0setup.py" %*
+  "%~1" "%~dp0setup.py"
+  goto :finish
 )
-set "REDFRAME_RESULT=%errorlevel%"
-if not "%REDFRAME_RESULT%"=="0" echo Setup failed. Read the message above or see START_HERE.md.
+if defined DSH_PRIMARY_RUNTIME (
+  if exist "%DSH_PRIMARY_RUNTIME%\dependencies\python\python.exe" (
+    "%DSH_PRIMARY_RUNTIME%\dependencies\python\python.exe" "%~dp0setup.py"
+    goto :finish
+  )
+)
+echo In DeepSeek Harness, call load_workspace_dependencies to obtain its Python path.
+echo Then run: install.cmd "FULL_PATH_TO_HARNESS_PYTHON_EXE"
+echo Or run that Python executable with this folder's setup.py.
 pause
-exit /b %REDFRAME_RESULT%
+exit /b 1
+:finish
+exit /b %errorlevel%

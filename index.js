@@ -12,14 +12,10 @@ export function apply(ctx,config={}){
  const runtimePath=path.join(installDir,'runtime.json');
  if(!fs.existsSync(runtimePath))throw Error('Redframe backend is not installed: run backend/install.cmd first, then set this plugin config.installDir to that installed backend folder.');
  const runtime=JSON.parse(fs.readFileSync(runtimePath,'utf8'));
+ if(runtime.engine!=='openpyxl')throw Error('Backend needs the 0.2 installer migration; rerun backend/install.cmd with Harness Python.');
  const command=runtime.python,script=path.join(installDir,'server.py');
  if(typeof command!=='string'||!fs.existsSync(command)||!fs.existsSync(script))throw Error('Backend paths are invalid; reinstall after moving its folder.');
- const env={};
- for(const key of ['REDFRAME_NODE','REDFRAME_NODE_MODULES','REDFRAME_ARTIFACT_MARKER']){
-  if(typeof runtime.env?.[key]!=='string'||!runtime.env[key])throw Error(`Backend runtime is missing ${key}; rerun its installer.`);
-  env[key]=runtime.env[key];
- }
  const serverName=config.serverName||'redframe_digitizer';
  if(!/^[A-Za-z0-9_-]{1,32}$/.test(serverName))throw Error('Invalid MCP server name');
- ctx.mcpManager.register(serverName,{transport:'stdio',command,args:[script],cwd:installDir,env,startupTimeoutMs:30000,toolCallTimeoutMs:300000});
+ ctx.mcpManager.register(serverName,{transport:'stdio',command,args:[script],cwd:installDir,startupTimeoutMs:30000,toolCallTimeoutMs:300000});
 }
