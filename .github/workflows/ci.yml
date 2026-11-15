@@ -1,0 +1,17 @@
+name: Source checks
+on: [push, pull_request]
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: node --test test/plugin.test.mjs
+      - run: python -m py_compile backend/server.py backend/core.py backend/setup.py backend/self_test.py
+      # Full PDF/Excel integration requires an existing Codex spreadsheet runtime.
+      # This CI job checks plugin contracts and Python syntax, not visual accuracy.

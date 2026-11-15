@@ -1,0 +1,5 @@
+# The package-root entry is a host plugin. The Desktop/Web profile supplies mcpManager.
+- insert:
+    - id: redframe-digitizer
+      name: dsh-redframe-digitizer
+      inject: [mcpManager]

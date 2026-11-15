@@ -1,0 +1,18 @@
+{
+  "name": "dsh-redframe-digitizer",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin bridge for agent-reviewed red-frame PDF graph digitization into Excel",
+  "repository": {"type": "git", "url": "https://github.com/Heresy0/dsh-redframe-digitizer.git"},
+  "homepage": "https://github.com/Heresy0/dsh-redframe-digitizer#readme",
+  "type": "module",
+  "main": "index.js",
+  "exports": {".": "./index.js", "./cordis.patch.yml": "./cordis.patch.yml", "./package.json": "./package.json"},
+  "files": ["index.js", "cordis.patch.yml", "README.md", "LICENSE", "AGENTS.md", "backend/*.py", "backend/*.mjs", "backend/*.cmd", "backend/requirements.txt"],
+  "keywords": ["dsh-plugin", "mcp", "graph-digitizer", "pdf", "excel"],
+  "license": "MIT",
+  "engines": {"node": ">=24.9.0", "dsh": ">=0.2.2-rc.3 <0.3.0"},
+  "dsh": {"bundle": {"patch": "./cordis.patch.yml"}},
+  "peerDependencies": {"@deepseek-ai/cordis": "*", "@deepseek-ai/dsh-mcp-manager": ">=0.2.2-rc.3 <0.3.0"},
+  "peerDependenciesMeta": {"@deepseek-ai/cordis": {"optional": true}, "@deepseek-ai/dsh-mcp-manager": {"optional": true}},
+  "scripts": {"test": "node --test test/plugin.test.mjs"}
+}

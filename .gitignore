@@ -1,0 +1,15 @@
+node_modules/
+backend/.venv/
+backend/vendor/
+backend/wheelhouse/
+backend/__pycache__/
+backend/jobs/
+backend/selftest/
+backend/runtime.json
+backend/mcp-client.json
+backend/selftest_report.json
+backend/.codex/
+*.zip
+*.tgz
+.env
+*.log

@@ -1,0 +1,5 @@
+mcp==1.30.0
+pypdf>=5,<7
+pypdfium2>=4,<6
+Pillow>=10,<13
+numpy>=1.26,<3
